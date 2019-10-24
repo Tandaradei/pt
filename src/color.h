@@ -30,21 +30,19 @@ Color3f addColor3f(Color3f a, Color3f b) {
 }
 
 Color3f multColor3f(Color3f a, Color3f b) {
-    Color3f result = {
+    return (Color3f) {
         .r = a.r * b.r,
         .g = a.g * b.g,
         .b = a.b * b.b
     };
-    return result;
 }
 
-Color3f multColor3fScalar(Color3f a, float scalar) {
-    Color3f result = {
-        .r = a.r * scalar,
-        .g = a.g * scalar,
-        .b = a.b * scalar
+Color3f multColor3fScalar(Color3f color, float scalar) {
+    return (Color3f) {
+        .r = color.r * scalar,
+        .g = color.g * scalar,
+        .b = color.b * scalar
     };
-    return result;
 }
 
 #endif // COLOR_H

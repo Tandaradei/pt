@@ -2,6 +2,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include "ppm.h"
@@ -11,25 +12,17 @@
 #include "material.h"
 #include "scene.h"
 #include "util.h"
+#define STATS 1
+#include "stats.h"
 
+Stats global_stats = {};
 
 #define IMAGE_SIZE_X 512
 #define IMAGE_SIZE_Y 512
-#define MAX_STEPS 32
+#define MAX_STEPS 16
 #define MAX_DISTANCE 100.0f
 
-#define STATS 1
-
-#if STATS
-unsigned int totalPrimaryRays = 0;
-unsigned int primaryRayHits = 0;
-unsigned int totalRays = 0;
-unsigned int rayHits = 0;
-unsigned int bounceRaysReachedMaxDepth = 0;
-unsigned int bounceRaysToLight = 0;
-unsigned int primaryRaysToLight = 0;
-unsigned int primaryRayMaterialHits[4] = {0};
-#endif
+#define PLANE(a, b, c, d) (TriangleVertices){a, b, c}, (TriangleVertices){c, d, a}
 
 typedef struct Ray {
     Vec3 origin;
@@ -43,7 +36,7 @@ const Material materials[] = {
     {.roughness = 1.0f, .emission = 0.0f, .diffuse = { 1.0f, 0.05f, 0.05f}},
     {.roughness = 0.0f, .emission = 0.0f, .diffuse = { 0.0f, 1.0f, 0.5f}},
     {.roughness = 1.0f, .emission = 4.0f, .diffuse = { 1.0f, 1.0f, 1.0f}},
-    {.roughness = 1.0f, .emission = 0.0f, .diffuse = { 0.1f, 0.05f, 1.0f}},
+    {.roughness = 1.0f, .emission = 2.0f, .diffuse = { 0.1f, 0.05f, 1.0f}},
 };
 
 Material getMaterial(MaterialHandle handle) {
@@ -125,7 +118,7 @@ TriangleIntersection intersectTriangle(TriangleVertices vertices, Ray ray) {
 }
 
 TriangleHit traceRay(Scene* scene, const Ray ray) {
-    TriangleHit bestHit = {
+    TriangleHit best_hit = {
         .handle = 0,
         .intersection = {
             .distance = MAX_DISTANCE,
@@ -136,34 +129,33 @@ TriangleHit traceRay(Scene* scene, const Ray ray) {
         .normal = {0.0f, 0.0f, 1.0f}
     };
     #if STATS
-    totalRays++;
+    global_stats.ray_count++;
     #endif
 
-    for(unsigned int i = 1; i <= scene->triangleCount; i++) {
+    for(unsigned int i = 1; i <= scene->triangle_count; i++) {
         TriangleIntersection result = intersectTriangle(getTriangleVertices(scene, i), ray);
         if(result.u >= 0.0f && result.v >= 0.0f && result.u + result.v <= 1.0f) {
-            if(result.distance > 0.0f && result.distance < bestHit.intersection.distance) {
-                bestHit.intersection = result;
-                bestHit.handle = i;
+            if(result.distance > 0.0f && result.distance < best_hit.intersection.distance) {
+                best_hit.intersection = result;
+                best_hit.handle = i;
             }
         }
     }
 
-    if(bestHit.handle != 0) {
-        TriangleVertices vertices = getTriangleVertices(scene, bestHit.handle);
+    if(best_hit.handle != 0) {
+        TriangleVertices vertices = getTriangleVertices(scene, best_hit.handle);
         Vec3 v12 = subVec3(vertices.v2, vertices.v1);
         Vec3 v13 = subVec3(vertices.v3, vertices.v1);
-        bestHit.normal = normalizeVec3(cross(v12, v13));
+        best_hit.normal = normalizeVec3(cross(v12, v13));
         #if STATS
-        rayHits++;
+        global_stats.ray_hits++;
         #endif
     }
-    
 
-    return bestHit;
+    return best_hit;
 }
 
-Color3f sampleBounceRays(Scene* scene, Ray ray, const unsigned int max_depth) {
+Color3f sampleBounceRay(Scene* scene, Ray ray, const unsigned int max_depth) {
     Color3f result = {1.0f, 1.0f, 1.0f};
     for(unsigned int i = 0; i < max_depth; i++) {
         const TriangleHit hit = traceRay(scene, ray);
@@ -176,50 +168,46 @@ Color3f sampleBounceRays(Scene* scene, Ray ray, const unsigned int max_depth) {
 
         if(material.emission > 0.0f) {
             #if STATS
-            bounceRaysToLight++;
+            global_stats.bounce_rays.hit_emissive++;
             #endif
-            return multColor3fScalar(material.diffuse, material.emission);
+            return multColor3fScalar(result, material.emission);
         }
         ray.origin = addVec3(hit.intersection.world_pos, multVec3Scalar(hit.normal, 0.001f));
         ray.dir = reflectVec3InHemisphere(ray.dir, hit.normal, material.roughness);
     }
     #if STATS
-    bounceRaysReachedMaxDepth++;
+    global_stats.bounce_rays.reached_max_depth++;
     #endif
-    return BACKGROUND_COLOR;
+    return (Color3f){0.0f, 0.0f, 0.0f};
 }
 
 Color3f samplePixelColor(Scene* scene, const unsigned int x, const unsigned int y, const unsigned int spp) {
-    const Vec3 image_plane_point = { 
+    const Norm3 origin_to_image_plane_point = normalizeVec3((Vec3){ 
         .x = (-1.0f + (float)(x) / (float)(IMAGE_SIZE_X) * 2.0f) * 1.5f,
         .y = (1.0f - (float)(y) / (float)(IMAGE_SIZE_Y) * 2.0f)  * 1.5f,
         .z = 1.0f
-    };
-    const Norm3 dir = normalizeVec3(image_plane_point);
+    });
     const Ray primary_ray = {
         .origin = { 0.0f, 0.0f, 0.0f },
-        .dir = dir
+        .dir = origin_to_image_plane_point
     };
 
     const TriangleHit primary_hit = traceRay(scene, primary_ray);
     #if STATS
-    totalPrimaryRays++;
+    global_stats.primary_rays.count++;
     #endif
     
     if(primary_hit.handle != 0) {
         #if STATS
-        primaryRayHits++;
+        global_stats.primary_rays.hits++;
         #endif
         const MaterialHandle material_handle = getMaterialHandle(scene, primary_hit.handle);
         const Material primary_hit_material = getMaterial(material_handle);
-        #if STATS
-        primaryRayMaterialHits[material_handle-1]++;
-        #endif
         if(primary_hit_material.emission > 0.0f) {
             #if STATS
-            primaryRaysToLight++;
+            global_stats.primary_rays.hit_emissive++;
             #endif
-            return multColor3fScalar(primary_hit_material.diffuse, primary_hit_material.emission);
+            return primary_hit_material.diffuse;
         }
         const Vec3 ray_origin = addVec3(primary_hit.intersection.world_pos, multVec3Scalar(primary_hit.normal, 0.001f));
         Color3f pixel_color_sum = {0.0f, 0.0f, 0.0f};
@@ -229,7 +217,8 @@ Color3f samplePixelColor(Scene* scene, const unsigned int x, const unsigned int 
                 .origin = ray_origin,
                 .dir = reflectVec3InHemisphere(primary_ray.dir, primary_hit.normal, primary_hit_material.roughness)
             };
-            pixel_color_sum = addColor3f(pixel_color_sum, multColor3f(primary_hit_material.diffuse, sampleBounceRays(scene, ray, MAX_STEPS)));
+            const Color3f bounce_ray_color = sampleBounceRay(scene, ray, MAX_STEPS);
+            pixel_color_sum = addColor3f(pixel_color_sum, multColor3f(primary_hit_material.diffuse, bounce_ray_color));
         }
         const float color_factor = 1.0f / (float) spp;
         return multColor3fScalar(pixel_color_sum, color_factor);
@@ -238,61 +227,63 @@ Color3f samplePixelColor(Scene* scene, const unsigned int x, const unsigned int 
 }
 
 int main(int argc, const char** argv) {
-    srand((unsigned)time(0));
+    srand((unsigned)time(NULL));
+
+    const Vec3 box[8] = {
+        {{-0.5f, -0.5f, 0.0f}}, // LBF 0
+        {{-0.5f, -0.5f, 1.0f}}, // LBB 1
+        {{-0.5f,  0.5f, 0.0f}}, // LTF 2
+        {{-0.5f,  0.5f, 1.0f}}, // LTB 3
+        {{ 0.5f, -0.5f, 0.0f}}, // RBF 4
+        {{ 0.5f, -0.5f, 1.0f}}, // RBB 5
+        {{ 0.5f,  0.5f, 0.0f}}, // RTF 6
+        {{ 0.5f,  0.5f, 1.0f}}, // RTB 7
+    };
 
     Scene scene = {
-        .triangleVertices = {
+        .triangle_vertices = {
             // Back plane
-            {.v1 = {-0.5f, -0.5f, 1.5f}, .v2 = {-0.5f, 0.5f, 1.5f}, .v3 = {0.5f, 0.5f, 1.5f}},
-            {.v1 = {-0.5f, -0.5f, 1.5f}, .v2 = {0.5f, 0.5f, 1.5f}, .v3 = {0.5f, -0.5f, 1.5f}},
-            // Lighting plane
-            {.v1 = {-0.2f, 0.49f, 1.2f}, .v2 = {-0.2f, 0.49f, 0.8f}, .v3 = {0.2f, 0.49f, 0.8f}},
-            {.v1 = {-0.2f, 0.49f, 1.2f}, .v2 = {0.2f, 0.49f, 0.8f}, .v3 = {0.2f, 0.49f, 1.2f}},
+            PLANE(box[1], box[3], box[7], box[5]),
             // Ground plane
-            {.v1 = {-0.5f, -0.5f, 1.5f}, .v2 = {0.5f, -0.5f, 0.5f}, .v3 = {-0.5f, -0.5f, 0.5f}},
-            {.v1 = {-0.5f, -0.5f, 1.5f}, .v2 = {0.5f, -0.5f, 1.5f}, .v3 = {0.5f, -0.5f, 0.5f}},
+            PLANE(box[1], box[5], box[4], box[0]),
             // Left plane
-            {.v1 = {-0.5f, -0.5f, 0.5f}, .v2 = {-0.5f, 0.5f, 0.5f}, .v3 = {-0.5f, 0.5f, 1.5f}},
-            {.v1 = {-0.5f, -0.5f, 0.5f}, .v2 = {-0.5f, 0.5f, 1.5f}, .v3 = {-0.5f, -0.5f, 1.5f}},
+            PLANE(box[0], box[2], box[3], box[1]),
             // Right plane
-            {.v1 = {0.5f, -0.5f, 1.5f}, .v2 = {0.5f, 0.5f, 1.5f}, .v3 = {0.5f, 0.5f, 0.5f}},
-            {.v1 = {0.5f, -0.5f, 1.5f}, .v2 = {0.5f, 0.5f, 0.5f}, .v3 = {0.5f, -0.5f, 0.5f}},
+            PLANE(box[5], box[7], box[6], box[4]),
             // Top plane
-            {.v1 = {-0.5f, 0.5f, 1.5f}, .v2 = {-0.5f, 0.5f, 0.5f}, .v3 = {0.5f, 0.5f, 0.5f}},
-            {.v1 = {-0.5f, 0.5f, 1.5f}, .v2 = {0.5f, 0.5f, 0.5f}, .v3 = {0.5f, 0.5f, 1.5f}},
-            // Center plane
-            {.v1 = {-0.1f, -0.4f, 1.3f}, .v2 = {0.2f, -0.4f, 0.9f}, .v3 = {-0.1f, -0.4f, 0.9f}},
-            {.v1 = {-0.1f, -0.4f, 1.3f}, .v2 = {0.2f, -0.4f, 1.3f}, .v3 = {0.2f, -0.4f, 0.9f}},
+            PLANE(box[3], box[2], box[6], box[7]),
+            // Lighting plane top
+            {.v1 = {-0.2f, 0.49f, 0.7f}, .v2 = {-0.2f, 0.49f, 0.3f}, .v3 = {0.2f, 0.49f, 0.3f}},
+            {.v1 = {-0.2f, 0.49f, 0.7f}, .v2 = {0.2f, 0.49f, 0.3f}, .v3 = {0.2f, 0.49f, 0.7f}},
+            // Lighting plane center
+            {.v1 = {-0.1f, -0.4f, 0.8f}, .v2 = {0.2f, -0.4f, 0.4f}, .v3 = {-0.1f, -0.4f, 0.4f}},
+            {.v1 = {-0.1f, -0.4f, 0.8f}, .v2 = {0.2f, -0.4f, 0.8f}, .v3 = {0.2f, -0.4f, 0.4f}},
         },
-        .triangleMaterialHandles = {
-            1,
-            1,
-            4,
-            4,
-            1,
-            1,
-            2,
-            2,
-            3,
-            3,
-            1,
-            1,
-            5,
-            5,
+        .triangle_material_handles = {
+            1, 1,
+            1, 1,
+            2, 2,
+            3, 3,
+            1, 1,
+            4, 4,
+            5, 5,
         },
-        14
+        .triangle_count = 14
     };
     unsigned int spp_input = 32;
     if(argc > 1) {
         spp_input = atoi(argv[1]);
     }
     const unsigned int spp = spp_input;
+    const double report_timer_interval_s = 1.0;
 
     const unsigned int IMAGE_DATA_SIZE = IMAGE_SIZE_X * IMAGE_SIZE_Y * 3;
     unsigned char data[IMAGE_DATA_SIZE];
+
     printf("Begin sampling\n");
-    clock_t start = clock();
-     
+    const clock_t start = clock();
+    clock_t report_timer_start = clock();
+
     for(unsigned int y = 0; y < IMAGE_SIZE_Y; y++) {
         for(unsigned int x = 0; x < IMAGE_SIZE_X; x++) {
             const unsigned int data_index = (x+y*IMAGE_SIZE_X)*3;
@@ -301,36 +292,55 @@ int main(int argc, const char** argv) {
             data[data_index + 0] = (char)(clamp(pixel_color.r, 0.0f, 1.0f) * 255.0f);
             data[data_index + 1] = (char)(clamp(pixel_color.g, 0.0f, 1.0f) * 255.0f);
             data[data_index + 2] = (char)(clamp(pixel_color.b, 0.0f, 1.0f) * 255.0f);
-            if(data_index % (1000000 / spp) * 3 == 0) {
-                printf("Finished %.1f%%\n", ((float)(data_index) / (float)(IMAGE_DATA_SIZE)) * 100.0f);
+            const clock_t report_timer_end = clock();
+            const double timer_s = ((double) (report_timer_end - report_timer_start)) / CLOCKS_PER_SEC;
+
+            if(timer_s > report_timer_interval_s) {
+                const double work_done = ((double)(data_index) / (double)(IMAGE_DATA_SIZE));
+                const clock_t end = clock();
+                const double cpu_time_used = ((double) (end - start)) / CLOCKS_PER_SEC;
+                const double approx_total_time = cpu_time_used / work_done;
+                printf("Finished %4.1f%%, %02d:%02d / ~%02d:%02d\n", work_done * 100.0, (unsigned int)(cpu_time_used)/60, (unsigned int)(cpu_time_used)%60, (unsigned int)(approx_total_time)/60, (unsigned int)(approx_total_time)%60);
+                // reset timer
+                report_timer_start = clock();
             }
         }
     }
-    clock_t end = clock();
-    double cpu_time_used = ((double) (end - start)) / CLOCKS_PER_SEC;
+    const clock_t end = clock();
+    const double cpu_time_used = ((double) (end - start)) / CLOCKS_PER_SEC;
     printf("Finished sampling\n");
 
-    write_ppm("test.ppm", IMAGE_SIZE_X, IMAGE_SIZE_Y, data);
-    const unsigned int totalBounceRays = totalRays - totalPrimaryRays;
-    const unsigned int bounceRayHits = rayHits - primaryRayHits;
+    char filename[256] = ".\\out\\render_";
+    char temp_convert[128];
+    strcat(filename, itoa(time(NULL), temp_convert, 10));
+    strcat(filename, "_");
+    strcat(filename, itoa(spp, temp_convert, 10));
+    strcat(filename, ".ppm");
+
+    write_ppm(filename, IMAGE_SIZE_X, IMAGE_SIZE_Y, data);
+    printf("Wrote image to '%s'\n", filename);
+
+    const Stats gs = global_stats;
+    const unsigned int bounce_rays_count = gs.ray_count - gs.primary_rays.count;
+    const unsigned int bounce_rays_hits = gs.ray_hits - gs.primary_rays.hits;
 
     #if STATS
     printf("Statistics\n");
     printf("==========\n");
-    printf("Total time:                            %16.3fs\n", cpu_time_used);
-    printf("Total rays:                            %16d    %.0f rays/s\n", totalRays, (double)(totalRays) / cpu_time_used);
-    printf("Total primary rays:                    %16d\n", totalPrimaryRays);
-    printf("Total bounce rays:                     %16d\n", totalBounceRays);
-    printf("---\n");
-    printf("Primary ray hits:                      %16d    %5.2f%%\n", primaryRayHits, ((double)(primaryRayHits) / (double)(totalPrimaryRays))*100.0);
-    printf("Primary rays to light source:          %16d    %5.2f%%\n", primaryRaysToLight, ((double)(primaryRaysToLight) / (double)(totalPrimaryRays))*100.0);
-    printf("Bounce ray hits:                       %16d    %5.2f%%\n", bounceRayHits, ((double)(bounceRayHits) / (double)(totalBounceRays))*100.0);
-    printf("Bounce rays to light source:           %16d    %5.2f%%\n", bounceRaysToLight, ((double)(bounceRaysToLight) / (double)(primaryRayHits * spp))*100.0);
-    printf("Bounce rays with max depth:            %16d    %5.2f%%\n", bounceRaysReachedMaxDepth, ((double)(bounceRaysReachedMaxDepth) / (double)(primaryRayHits * spp))*100.0);
-    printf("---\n");
-    printf("Avg bounce ray depth:                  %16.2f\n", ((double)(totalBounceRays)/ (double)(spp)) / ((double)(primaryRayHits)));
-    printf("---\n");
-    printf("Primary ray material hits:             %6d %6d %6d %6d\n", primaryRayMaterialHits[0], primaryRayMaterialHits[1], primaryRayMaterialHits[2], primaryRayMaterialHits[3]);
+    printf("GENERAL\n");
+    printStatTime("Total time", (unsigned int)(cpu_time_used));
+    printStatTotal("Total rays", gs.ray_count);
+    printStatFactor("Rays per second", (double)(gs.ray_count) / cpu_time_used);
+    printf("PRIMARY RAYS\n");
+    printStatTotal("Total primary rays", gs.primary_rays.count);
+    printStatTotalPercent("Primary ray hits", gs.primary_rays.hits, gs.primary_rays.count);
+    printStatTotalPercent("Primary rays to light source", gs.primary_rays.hit_emissive, gs.primary_rays.count);
+    printf("BOUNCE RAYS\n");
+    printStatTotal("Total bounce rays", bounce_rays_count);
+    printStatTotalPercent("Bounce ray hits", bounce_rays_hits, bounce_rays_count);
+    printStatTotalPercent("Bounce rays to light source", gs.bounce_rays.hit_emissive, bounce_rays_count);
+    printStatTotalPercent("Bounce rays with max depth", gs.bounce_rays.reached_max_depth, bounce_rays_count);
+    printStatFactor("Avg bounce ray depth", ((double)(bounce_rays_count)/ (double)(spp)) / ((double)(gs.primary_rays.hits)));
     #endif
     
     return 0;

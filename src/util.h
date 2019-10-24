@@ -3,11 +3,11 @@
 
 #include <stdlib.h>
 
-float clamp(float value, float min, float max) {
+inline float clamp(float value, float min, float max) {
     return value < min ? min : (value > max ? max : value); 
 }
 
-float randFloat() {
+inline float randFloat() {
     return (float)rand()/(float)(RAND_MAX);
 }
 

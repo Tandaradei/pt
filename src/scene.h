@@ -7,17 +7,17 @@
 #define MAX_TRIANGLES 100
 
 typedef struct Scene {
-    TriangleVertices triangleVertices[MAX_TRIANGLES];
-    MaterialHandle triangleMaterialHandles[MAX_TRIANGLES];
-    unsigned int triangleCount;
+    TriangleVertices triangle_vertices[MAX_TRIANGLES];
+    MaterialHandle triangle_material_handles[MAX_TRIANGLES];
+    unsigned int triangle_count;
 } Scene;
 
 TriangleVertices getTriangleVertices(Scene* scene, TriangleHandle handle) {
-    return scene->triangleVertices[handle-1];
+    return scene->triangle_vertices[handle-1];
 }
 
 MaterialHandle getMaterialHandle(Scene* scene, TriangleHandle handle) {
-    return scene->triangleMaterialHandles[handle-1];
+    return scene->triangle_material_handles[handle-1];
 }
 
 #endif // SCENE_H

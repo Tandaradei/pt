@@ -1,0 +1,1 @@
+gcc src/main.c src/vec3.c -o pt.exe -O3
