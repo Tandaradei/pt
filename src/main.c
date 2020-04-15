@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <omp.h>
 
 #include "ppm.h"
 #include "vec3.h"
@@ -29,14 +30,15 @@ typedef struct Ray {
     Norm3 dir;
 } Ray;
 
-const Color3f BACKGROUND_COLOR = {0.1f, 0.1f, 0.1f};
+const Color3f BACKGROUND_COLOR = {1.0f, 1.0f, 1.0f};
 
 const Material materials[] = {
     {.roughness = 1.0f, .emission = 0.0f, .diffuse = { 1.0f, 1.0f, 1.0f}},
     {.roughness = 1.0f, .emission = 0.0f, .diffuse = { 1.0f, 0.05f, 0.05f}},
     {.roughness = 0.0f, .emission = 0.0f, .diffuse = { 0.0f, 1.0f, 0.5f}},
-    {.roughness = 1.0f, .emission = 4.0f, .diffuse = { 1.0f, 1.0f, 1.0f}},
-    {.roughness = 1.0f, .emission = 2.0f, .diffuse = { 0.1f, 0.05f, 1.0f}},
+    {.roughness = 1.0f, .emission = 2.0f, .diffuse = { 1.0f, 0.05f, 0.01f}},
+    {.roughness = 1.0f, .emission = 4.0f, .diffuse = { 0.1f, 0.02f, 1.0f}},
+    {.roughness = 1.0f, .emission = 0.0f, .diffuse = { 0.05f, 0.05f, 1.0f}},
 };
 
 Material getMaterial(MaterialHandle handle) {
@@ -160,7 +162,7 @@ Color3f sampleBounceRay(Scene* scene, Ray ray, const unsigned int max_depth) {
     for(unsigned int i = 0; i < max_depth; i++) {
         const TriangleHit hit = traceRay(scene, ray);
         if(hit.handle == 0) {
-            return BACKGROUND_COLOR;
+            return multColor3f(BACKGROUND_COLOR, result);;
         }
 
         const Material material = getMaterial(getMaterialHandle(scene, hit.handle));
@@ -183,12 +185,12 @@ Color3f sampleBounceRay(Scene* scene, Ray ray, const unsigned int max_depth) {
 
 Color3f samplePixelColor(Scene* scene, const unsigned int x, const unsigned int y, const unsigned int spp) {
     const Norm3 origin_to_image_plane_point = normalizeVec3((Vec3){ 
-        .x = (-1.0f + (float)(x) / (float)(IMAGE_SIZE_X) * 2.0f) * 1.5f,
-        .y = (1.0f - (float)(y) / (float)(IMAGE_SIZE_Y) * 2.0f)  * 1.5f,
+        .x = (-1.0f + (float)(x) / (float)(IMAGE_SIZE_X) * 2.0f),
+        .y = (1.0f - (float)(y) / (float)(IMAGE_SIZE_Y) * 2.0f),
         .z = 1.0f
     });
     const Ray primary_ray = {
-        .origin = { 0.0f, 0.0f, 0.0f },
+        .origin = { 0.0f, 0.0f, -0.5f },
         .dir = origin_to_image_plane_point
     };
 
@@ -207,7 +209,7 @@ Color3f samplePixelColor(Scene* scene, const unsigned int x, const unsigned int 
             #if STATS
             global_stats.primary_rays.hit_emissive++;
             #endif
-            return primary_hit_material.diffuse;
+            return multColor3fScalar(primary_hit_material.diffuse, primary_hit_material.emission);
         }
         const Vec3 ray_origin = addVec3(primary_hit.intersection.world_pos, multVec3Scalar(primary_hit.normal, 0.001f));
         Color3f pixel_color_sum = {0.0f, 0.0f, 0.0f};
@@ -253,11 +255,20 @@ int main(int argc, const char** argv) {
             // Top plane
             PLANE(box[3], box[2], box[6], box[7]),
             // Lighting plane top
-            {.v1 = {-0.2f, 0.49f, 0.7f}, .v2 = {-0.2f, 0.49f, 0.3f}, .v3 = {0.2f, 0.49f, 0.3f}},
-            {.v1 = {-0.2f, 0.49f, 0.7f}, .v2 = {0.2f, 0.49f, 0.3f}, .v3 = {0.2f, 0.49f, 0.7f}},
-            // Lighting plane center
-            {.v1 = {-0.1f, -0.4f, 0.8f}, .v2 = {0.2f, -0.4f, 0.4f}, .v3 = {-0.1f, -0.4f, 0.4f}},
-            {.v1 = {-0.1f, -0.4f, 0.8f}, .v2 = {0.2f, -0.4f, 0.8f}, .v3 = {0.2f, -0.4f, 0.4f}},
+            {.v1 = {-0.1f, 0.499f, 0.6f}, .v2 = {-0.1f, 0.499f, 0.4f}, .v3 = {0.1f, 0.499f, 0.4f}},
+            {.v1 = {-0.1f, 0.499f, 0.6f}, .v2 = {0.1f, 0.499f, 0.4f}, .v3 = {0.1f, 0.499f, 0.6f}},
+            // Lighting plane left
+            {.v1 = {-0.499f, 0.2f, 0.2f}, .v2 = {-0.499f, 0.25f, 0.2f}, .v3 = {-0.499f, 0.25f, 0.8f}},
+            {.v1 = {-0.499f, 0.25f, 0.8f}, .v2 = {-0.499f, 0.2f, 0.8f}, .v3 = {-0.499f, 0.2f, 0.2f}},
+            // Right shadow caster plane
+            {(Vec3){0.25f, -0.45f, 1.0f}, (Vec3){0.25f, 0.45f, 1.0f}, (Vec3){0.25f, 0.45f, 0.3f}},
+            {(Vec3){0.25f, 0.45f, 0.3f}, (Vec3){0.25f, -0.45f, 0.3f}, (Vec3){0.25f, -0.45f, 1.0f}},
+            // Center shadow caster plane
+            {(Vec3){0.15f, 0.05f, 0.7f}, (Vec3){0.15f, 0.15f, 0.7f}, (Vec3){0.15f, 0.15f, 0.5f}},
+            {(Vec3){0.15f, 0.15f, 0.5f}, (Vec3){0.15f, 0.05f, 0.5f}, (Vec3){0.15f, 0.05f, 0.7f}},
+            // Center shadow caster plane 2
+            {(Vec3){0.1f, -0.15f, 0.7f}, (Vec3){0.1f, 0.1f, 0.7f}, (Vec3){0.1f, 0.1f, 0.5f}},
+            {(Vec3){0.1f, 0.1f, 0.5f}, (Vec3){0.1f, -0.15f, 0.5f}, (Vec3){0.1f, -0.15f, 0.7f}},
         },
         .triangle_material_handles = {
             1, 1,
@@ -267,8 +278,11 @@ int main(int argc, const char** argv) {
             1, 1,
             4, 4,
             5, 5,
+            1, 1,
+            6, 6,
+            3, 3,
         },
-        .triangle_count = 14
+        .triangle_count = 20
     };
     unsigned int spp_input = 32;
     if(argc > 1) {
@@ -283,7 +297,10 @@ int main(int argc, const char** argv) {
     printf("Begin sampling\n");
     const clock_t start = clock();
     clock_t report_timer_start = clock();
+    unsigned int data_filled = 0;
+    const unsigned int data_report_interval = 1000000 / spp;
 
+    #pragma omp parallel for
     for(unsigned int y = 0; y < IMAGE_SIZE_Y; y++) {
         for(unsigned int x = 0; x < IMAGE_SIZE_X; x++) {
             const unsigned int data_index = (x+y*IMAGE_SIZE_X)*3;
@@ -292,6 +309,16 @@ int main(int argc, const char** argv) {
             data[data_index + 0] = (char)(clamp(pixel_color.r, 0.0f, 1.0f) * 255.0f);
             data[data_index + 1] = (char)(clamp(pixel_color.g, 0.0f, 1.0f) * 255.0f);
             data[data_index + 2] = (char)(clamp(pixel_color.b, 0.0f, 1.0f) * 255.0f);
+            const unsigned int progress = ++data_filled; 
+            if(progress % data_report_interval == data_report_interval - 1) {
+                const double work_done = ((double)(progress * 3) / (double)(IMAGE_DATA_SIZE));
+                const clock_t end = clock();
+                const double cpu_time_used = ((double) (end - start)) / CLOCKS_PER_SEC;
+                const double approx_total_time = cpu_time_used / work_done;
+                printf("Finished %4.1f%%, %02d:%02d / ~%02d:%02d\n", work_done * 100.0, (unsigned int)(cpu_time_used)/60, (unsigned int)(cpu_time_used)%60, (unsigned int)(approx_total_time)/60, (unsigned int)(approx_total_time)%60);
+            }
+            
+            /*
             const clock_t report_timer_end = clock();
             const double timer_s = ((double) (report_timer_end - report_timer_start)) / CLOCKS_PER_SEC;
 
@@ -304,6 +331,7 @@ int main(int argc, const char** argv) {
                 // reset timer
                 report_timer_start = clock();
             }
+            */
         }
     }
     const clock_t end = clock();
@@ -311,10 +339,12 @@ int main(int argc, const char** argv) {
     printf("Finished sampling\n");
 
     char filename[256] = ".\\out\\render_";
-    char temp_convert[128];
-    strcat(filename, itoa(time(NULL), temp_convert, 10));
+    char temp_convert[32];
+    snprintf(temp_convert, 32,"%d", time(NULL));
+    strcat(filename, temp_convert);
     strcat(filename, "_");
-    strcat(filename, itoa(spp, temp_convert, 10));
+    snprintf(temp_convert, 32,"%d", spp);
+    strcat(filename, temp_convert);
     strcat(filename, ".ppm");
 
     write_ppm(filename, IMAGE_SIZE_X, IMAGE_SIZE_Y, data);
